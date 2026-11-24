@@ -1102,7 +1102,7 @@ function renderLogs(){
 function renderSummary(){
   const logs = loadLogs();
   const box = $('#summary');
-  $('#sumHint').textContent = logs.length + '件から';
+  $('#sumHint').textContent = '記録 ' + logs.length + '件';
   if(!logs.length){
     box.innerHTML = '<div class="empty">記録がたまると、不調が出やすいパターンが見えてきます。</div>';
     return;
