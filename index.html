@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>気象病ケア予報｜気圧と体調</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2288%22>🌤️</text></svg>">
 <style>
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;padding:0}
@@ -190,6 +191,8 @@
   .phasegrid b{font-size:13.5px;font-weight:700;font-variant-numeric:tabular-nums}
   .overlap{margin-top:11px;font-size:12.5px;color:#ffd6e8;background:rgba(244,114,182,.12);
     border:1px solid rgba(244,114,182,.3);border-radius:12px;padding:9px 11px;line-height:1.55}
+  .notice{margin-top:11px;font-size:12px;color:#c4ecff;background:rgba(56,189,248,.09);
+    border:1px solid rgba(56,189,248,.25);border-radius:12px;padding:9px 11px;line-height:1.55}
   .cycitem{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:12px;
     background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);margin-bottom:7px;flex-wrap:wrap}
   .cycitem .cd{font-size:12.5px;font-weight:600;color:#e0eef2;font-variant-numeric:tabular-nums}
@@ -415,7 +418,7 @@
       <button id="geoBtn">📍 現在地</button>
     </div>
     <div class="searchrow">
-      <input type="text" id="citySearch" placeholder="都市名で検索（例：東京、横浜）">
+      <input type="text" id="citySearch" placeholder="市区町村名で検索（例：横浜市、大阪市）">
       <button class="btn ghost" id="searchBtn">検索</button>
     </div>
     <div class="results" id="searchResults"></div>
@@ -426,6 +429,9 @@
 <div id="toast"></div>
 
 <script>
+window.__wcErrors = [];
+window.addEventListener('error', function(e){ window.__wcErrors.push((e.message||'error') + ' @' + (e.lineno||0) + ':' + (e.colno||0)); });
+window.addEventListener('unhandledrejection', function(e){ window.__wcErrors.push('rejection: ' + ((e.reason && e.reason.message) || e.reason)); });
 (function(){
 "use strict";
 
@@ -1274,6 +1280,9 @@ function renderCycle(){
         wrap.innerHTML += '<div class="overlap">⚠️ 気圧の変化が大きい日です。周期フェーズに関わらず、早めのセルフケアを。</div>';
       }
     }
+    if(ph.key === 'overdue'){
+      wrap.innerHTML += '<div class="notice">📅 前回の記録から日が経っています。新しい開始日を追加すると、フェーズと次回予定日の目安が正確になります。</div>';
+    }
   }
 
   // 設定
@@ -1322,7 +1331,7 @@ function addCycle(){
   saveCycle(cst);
   $('#cycStart').value = dayKey(nowMs());
   $('#cycEnd').value = '';
-  renderCycle(); renderChart(); renderCare(STATE.metrics);
+  renderCycle(); refreshWeatherViews();
   toast('周期を記録しました');
 }
 function delCycle(id){
@@ -1330,7 +1339,7 @@ function delCycle(id){
   const cst = loadCycle();
   cst.cycles = cst.cycles.filter(c => c.id !== id);
   saveCycle(cst);
-  renderCycle(); renderChart(); renderCare(STATE.metrics);
+  renderCycle(); refreshWeatherViews();
   toast('削除しました');
 }
 
@@ -1349,24 +1358,46 @@ async function searchCity(){
   if(!q) return;
   const box = $('#searchResults');
   box.innerHTML = '<div class="muted small" style="padding:8px">検索中…</div>';
+  const base = q.replace(/[市町村区都府県]$/,'') || q;
+  const variants = [];
+  for(const v of [q, base+'市', base+'区', base+'町', base+'都', base+'県', base+'村']){
+    if(v && variants.indexOf(v) < 0) variants.push(v);
+  }
   try{
-    const u = 'https://geocoding-api.open-meteo.com/v1/search?name=' + encodeURIComponent(q)
-      + '&count=6&language=ja&format=json';
-    const r = await fetch(u);
-    const j = await r.json();
-    const list = j.results || [];
-    if(!list.length){ box.innerHTML = '<div class="muted small" style="padding:8px">見つかりませんでした</div>'; return; }
-    box.innerHTML = list.map((c,i) =>
+    const parts = await Promise.all(variants.slice(0,7).map(v =>
+      fetch('https://geocoding-api.open-meteo.com/v1/search?name=' + encodeURIComponent(v)
+        + '&count=6&language=ja&format=json&countryCode=JP')
+        .then(r => r.json()).catch(() => ({results:[]}))
+    ));
+    const seen = {};
+    const all = [];
+    for(const j of parts){
+      for(const c of (j.results || [])){
+        if(c.country_code && c.country_code !== 'JP') continue;
+        const key = c.name + '@' + (+c.latitude).toFixed(2) + ',' + (+c.longitude).toFixed(2);
+        if(seen[key]) continue;
+        seen[key] = 1; all.push(c);
+      }
+    }
+    all.sort((a,b) => (b.population||0) - (a.population||0));
+    const top = all.slice(0,6);
+    if(!top.length){
+      box.innerHTML = '<div class="muted small" style="padding:8px">見つかりませんでした。「横浜市」「大阪市」のように市・区をつけて試してください</div>';
+      return;
+    }
+    box.innerHTML = top.map((c,i) =>
       '<button data-city="' + i + '"><div>' + esc(c.name) + '</div><div class="rr">'
-      + esc([c.admin1, c.country].filter(Boolean).join(' / ')) + '</div></button>'
+      + esc([c.admin1, c.country].filter(Boolean).join(' / '))
+      + (c.population ? ' ・ 人口 ' + Math.round(c.population/1000) + '千人' : '') + '</div></button>'
     ).join('');
     box.querySelectorAll('button[data-city]').forEach(b => {
       b.onclick = () => {
-        const c = list[+b.dataset.city];
+        const c = top[+b.dataset.city];
         setPlace({name:c.name + (c.admin1 ? '（' + c.admin1 + '）' : ''), lat:c.latitude, lon:c.longitude});
       };
     });
   }catch(e){
+    console.warn(e);
     box.innerHTML = '<div class="muted small" style="padding:8px">検索できませんでした</div>';
   }
 }
@@ -1389,11 +1420,18 @@ function geoLocate(){
 }
 
 /* ==================== タブ ==================== */
+function refreshWeatherViews(){
+  if(!STATE.metrics) return;
+  renderAlert();
+  renderChart();
+  renderCare(STATE.metrics);
+}
+
 function setTab(name){
   STATE.tab = name;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === name));
   document.querySelectorAll('section[id^="panel-"]').forEach(s => s.classList.toggle('hidden', s.id !== 'panel-' + name));
-  if(name === 'forecast'){ renderChart(); }
+  if(name === 'forecast'){ refreshWeatherViews(); }
   window.scrollTo({top:0, behavior:'smooth'});
 }
 
@@ -1484,7 +1522,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const cst = loadCycle();
     cst.settings = {cycleLen:l, periodLen:p};
     saveCycle(cst);
-    renderCycle(); renderChart(); renderCare(STATE.metrics);
+    renderCycle(); refreshWeatherViews();
     toast('設定を保存しました（周期' + l + '日・生理' + p + '日）');
   };
   $('#cycList').addEventListener('click', e => {
@@ -1505,7 +1543,7 @@ document.addEventListener('DOMContentLoaded', () => {
       cst.cycles.sort((a,b)=> a.start < b.start ? -1 : 1);
       saveCycle(cst);
       STATE.editingCycle = null;
-      renderCycle(); renderChart(); renderCare(STATE.metrics);
+      renderCycle(); refreshWeatherViews();
       toast('更新しました');
     }
   });
