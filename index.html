@@ -926,6 +926,7 @@ function renderChart(){
   svg.innerHTML = s;
   svg.onpointerdown = onChartPointer;
   svg.onpointermove = e => { if(e.pointerType === 'mouse' || e.buttons) onChartPointer(e); };
+  svg.onpointerleave = e => { if(e.pointerType === 'mouse') showDetail(t0, true); };
 
   // 初期表示：現在
   showDetail(t0, true);
